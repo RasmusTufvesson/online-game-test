@@ -7,6 +7,7 @@ pub enum Packet {
     Left(u32), // id
     Move(u32, Vec2), // id, new pos
     OnJoin(u32, Vec<(u32, Vec2)>), // id, (id, pos)
+    Sync(Vec<(u32, Vec2)>), // id, pos
 }
 
 impl Packet {

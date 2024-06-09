@@ -2,6 +2,8 @@ use glam::{vec2, Vec2};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::Instant;
+use std::time::Duration;
 use std::{io, collections::HashMap, error::Error, net::SocketAddr, sync::Arc};
 use crate::shared::Packet;
 
@@ -58,7 +60,7 @@ impl Shared {
         }
     }
 
-    async fn broadcast(&self, sender: SocketAddr, message: Packet) {
+    fn broadcast(&self, sender: SocketAddr, message: Packet) {
         for peer in self.peers.iter() {
             if *peer.0 != sender {
                 let _ = peer.1.0.send(message.clone());
@@ -136,15 +138,16 @@ async fn process(
 
     let mut peer = Peer::new(state.clone(), addr).await?;
     
-    println!("{} joined, sending packets", peer.identifier);
+    println!("{} joined", peer.identifier);
 
     {
         let state_read = state.read().await;
         socket.send_packet(Packet::OnJoin(peer.identifier, state_read.peers.iter().map(|(_, (_, pos, id))| (*id, *pos)).filter(|(id, _)| id != &peer.identifier).collect())).await;
-        state_read.broadcast(addr, Packet::Joined(peer.identifier)).await;
+        state_read.broadcast(addr, Packet::Joined(peer.identifier));
     }
 
-    println!("Sent join packets");
+    let sleep = tokio::time::sleep_until(Instant::now() + Duration::from_millis(100));
+    tokio::pin!(sleep);
 
     loop {
         tokio::select! {
@@ -153,18 +156,29 @@ async fn process(
             }
             result = socket.recv_packet() => match result {
                 Some(msg) => {
-                    let state_read = state.read().await;
-                    state_read.broadcast(addr, msg).await;
+                    let mut state_write = state.write().await;
+                    match msg {
+                        Packet::Move(_, pos) => {
+                            state_write.peers.get_mut(&addr).unwrap().1 = pos;
+                        }
+                        _ => {}
+                    }
+                    state_write.broadcast(addr, msg);
                 }
                 None => break,
             },
+            () = &mut sleep => {
+                sleep.as_mut().reset(Instant::now() + Duration::from_millis(100));
+                let state_read = state.read().await;
+                socket.send_packet(Packet::Sync(state_read.peers.iter().map(|(_, (_, pos, id))| (*id, *pos)).filter(|(id, _)| id != &peer.identifier).collect())).await;
+            }
         }
     }
 
     {
         let mut state_write = state.write().await;
         state_write.peers.remove(&addr);
-        state_write.broadcast(addr, Packet::Left(peer.identifier)).await;
+        state_write.broadcast(addr, Packet::Left(peer.identifier));
     }
 
     println!("{} left", peer.identifier);

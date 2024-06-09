@@ -41,11 +41,18 @@ async fn main() {
                     let _ = players.insert(id, vec2(50.0, 50.0));
                 }
                 Packet::Left(id) => {
+                    println!("{id} left");
                     let _ = players.remove(&id);
                 }
                 Packet::Move(id, new_pos) => {
                     if let Some(pos) = players.get_mut(&id) {
                         *pos = new_pos;
+                    }
+                }
+                Packet::Sync(positions) => {
+                    players.clear();
+                    for (p_id, pos) in positions {
+                        players.insert(p_id, pos);
                     }
                 }
                 _ => unreachable!()
